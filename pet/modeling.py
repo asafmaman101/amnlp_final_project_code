@@ -25,7 +25,8 @@ from sklearn.metrics import f1_score
 from transformers.data.metrics import simple_accuracy
 
 import log
-from pet.utils import InputExample, exact_match, save_logits, save_predictions, softmax, LogitsList, set_seed, eq_div
+from pet.utils import InputExample, exact_match, save_logits, save_predictions, softmax, LogitsList, set_seed, eq_div, \
+    Timer
 from pet.wrapper import TransformerModelWrapper, SEQUENCE_CLASSIFIER_WRAPPER, WrapperConfig
 
 from pet.utils import LOG_CONST_WIDTH
@@ -245,30 +246,62 @@ def train_pet(ensemble_model_config: WrapperConfig, ensemble_train_config: Train
     """
 
     # Step 1: Train an ensemble of models corresponding to individual patterns
+
+    logger.info('')
+    logger.info("".center(LOG_CONST_WIDTH, '#'))
+    logger.info("STEP 1: TRAINING ENSEMBLE MODELS".center(LOG_CONST_WIDTH, '#'))
+    logger.info("".center(LOG_CONST_WIDTH, '#'))
+
+    step_one_timer = Timer('step 1')
+
     train_pet_ensemble(ensemble_model_config, ensemble_train_config, ensemble_eval_config, pattern_ids, output_dir,
                        repetitions=ensemble_repetitions, train_data=train_data, unlabeled_data=unlabeled_data,
                        eval_data=eval_data, do_train=do_train, do_eval=do_eval,
                        save_unlabeled_logits=not no_distillation, seed=seed)
 
+    logger.info(step_one_timer.elapsed_str())
+
     if no_distillation:
         return
 
     # Step 2: Merge the annotations created by each individual model
+
+    logger.info('')
+    logger.info("".center(LOG_CONST_WIDTH, '#'))
+    logger.info("STEP 2: CREATING SOFT LABELS".center(LOG_CONST_WIDTH, '#'))
+    logger.info("".center(LOG_CONST_WIDTH, '#'))
+
+    step_two_timer = Timer('step 2')
+
     logits_file = os.path.join(output_dir, 'unlabeled_logits.txt')
+    logger.info('Merging ensemble results...')
     merge_logits(output_dir, logits_file, reduction)
+    logger.info('Finished merging.')
     logits = LogitsList.load(logits_file).logits
     assert len(logits) == len(unlabeled_data)
     logger.info("Got {} logits from file {}".format(len(logits), logits_file))
     for example, example_logits in zip(unlabeled_data, logits):
         example.logits = example_logits
 
+    logger.info(step_two_timer.elapsed_str())
+
     # Step 3: Train the final sequence classifier model
+
+    logger.info('')
+    logger.info("".center(LOG_CONST_WIDTH, '#'))
+    logger.info("STEP 3: TRAIN CLASSIFIER".center(LOG_CONST_WIDTH, '#'))
+    logger.info("".center(LOG_CONST_WIDTH, '#'))
+
+    step_three_timer = Timer('step 3')
+
     final_model_config.wrapper_type = SEQUENCE_CLASSIFIER_WRAPPER
     final_train_config.use_logits = True
 
     train_classifier(final_model_config, final_train_config, final_eval_config, os.path.join(output_dir, 'final'),
                      repetitions=final_repetitions, train_data=train_data, unlabeled_data=unlabeled_data,
                      eval_data=eval_data, do_train=do_train, do_eval=do_eval, seed=seed)
+
+    logger.info(step_three_timer.elapsed_str())
 
 
 def train_classifier(model_config: WrapperConfig, train_config: TrainConfig, eval_config: EvalConfig, output_dir: str,
@@ -328,6 +361,10 @@ def train_pet_ensemble(model_config: WrapperConfig, train_config: TrainConfig, e
     for pattern_id in pattern_ids:
         for iteration in range(repetitions):
 
+            model_type_string_lower = 'classifier' if model_config.wrapper_type == SEQUENCE_CLASSIFIER_WRAPPER else \
+                f'p{pattern_id}-i{iteration}'
+            model_type_string_upper = model_type_string_lower.upper()
+
             model_config.pattern_id = pattern_id
             results_dict = {}
 
@@ -344,6 +381,9 @@ def train_pet_ensemble(model_config: WrapperConfig, train_config: TrainConfig, e
 
             # Training
             if do_train:
+                logger.info('')
+                logger.info(f'{model_type_string_upper} TRAINING PHASE'.center(LOG_CONST_WIDTH, '='))
+
                 if ipet_data_dir:
                     p = os.path.join(ipet_data_dir, 'p{}-i{}-train.bin'.format(pattern_id, iteration))
                     ipet_train_data = InputExample.load_examples(p)
@@ -352,12 +392,21 @@ def train_pet_ensemble(model_config: WrapperConfig, train_config: TrainConfig, e
                 else:
                     ipet_train_data = None
 
+                logger.info(f'STARTING {model_type_string_upper} TRAINING...'.center(LOG_CONST_WIDTH, '-'))
+                training_timer = Timer(f'{model_type_string_lower} training')
+
                 results_dict.update(train_single_model(wrapper, train_data, train_config, eval_config,
                                                        ipet_train_data=ipet_train_data,
                                                        unlabeled_data=unlabeled_data))
 
-                with open(os.path.join(pattern_iter_output_dir, 'results.txt'), 'w') as fh:
+                logger.info(training_timer.elapsed_str())
+                logger.info(f'FINISHED {model_type_string_upper} TRAINING.'.center(LOG_CONST_WIDTH, '='))
+
+                results_txt_file = 'results.txt'
+                logger.info(f'Saving results to {os.path.join(pattern_iter_output_dir, results_txt_file)}')
+                with open(os.path.join(pattern_iter_output_dir, results_txt_file), 'w') as fh:
                     fh.write(str(results_dict))
+                logger.info("Saving complete")
 
                 logger.info("Saving trained model at {}...".format(pattern_iter_output_dir))
                 wrapper.save(pattern_iter_output_dir)
@@ -366,8 +415,11 @@ def train_pet_ensemble(model_config: WrapperConfig, train_config: TrainConfig, e
                 logger.info("Saving complete")
 
                 if save_unlabeled_logits:
+                    eval_unlabeled_timer = Timer('unlabeled logits')
+                    logger.info(f'Evaluating unlabeled logits for p.{pattern_id}-i.{iteration}')
                     logits = evaluate(wrapper, unlabeled_data, eval_config)['logits']
                     save_logits(os.path.join(pattern_iter_output_dir, 'logits.txt'), logits)
+                    logger.info(eval_unlabeled_timer.elapsed_str())
 
                 if not do_eval:
                     wrapper.model = None
@@ -376,7 +428,12 @@ def train_pet_ensemble(model_config: WrapperConfig, train_config: TrainConfig, e
 
             # Evaluation
             if do_eval:
-                logger.info("Starting evaluation...")
+                logger.info('')
+                logger.info(f'{model_type_string_upper} EVALUATION PHASE'.center(LOG_CONST_WIDTH, '='))
+                logger.info(f'STARTING {model_type_string_upper} EVALUATION...'.center(LOG_CONST_WIDTH, '-'))
+
+                pattern_iteration_timer_eval = Timer(f'{model_type_string_lower} evaluation')
+
                 if not wrapper:
                     wrapper = TransformerModelWrapper.from_pretrained(pattern_iter_output_dir)
 
@@ -386,12 +443,20 @@ def train_pet_ensemble(model_config: WrapperConfig, train_config: TrainConfig, e
                 save_logits(os.path.join(pattern_iter_output_dir, 'eval_logits.txt'), eval_result['logits'])
 
                 scores = eval_result['scores']
-                logger.info("--- RESULT (pattern_id={}, iteration={}) ---".format(pattern_id, iteration))
-                logger.info(scores)
+
+                logger.info(f'RESULT (pattern_id={pattern_id}, iteration={iteration})'.center(LOG_CONST_WIDTH, '-'))
+                logger.info(f'{model_type_string_lower} accuracy: {scores["acc"]}')
+
+                logger.info(pattern_iteration_timer_eval.elapsed_str())
+                logger.info(f'FINISHED {model_type_string_upper} EVALUATION.'.center(LOG_CONST_WIDTH, '='))
+
 
                 results_dict['test_set_after_training'] = scores
-                with open(os.path.join(pattern_iter_output_dir, 'results.json'), 'w') as fh:
-                    json.dump(results_dict, fh)
+                results_json = 'results.json'
+                logger.info(f'Saving results to {os.path.join(pattern_iter_output_dir, results_json)}')
+                with open(os.path.join(pattern_iter_output_dir, results_json), 'w') as fh:
+                    json.dump(results_dict, fh, indent=4)
+                logger.info("Saving complete")
 
                 for metric, value in scores.items():
                     results[metric][pattern_id].append(value)
@@ -401,10 +466,14 @@ def train_pet_ensemble(model_config: WrapperConfig, train_config: TrainConfig, e
                 torch.cuda.empty_cache()
 
     if do_eval:
-        logger.info("=== OVERALL RESULTS ===")
+        logger.info('')
+        if model_config.wrapper_type == SEQUENCE_CLASSIFIER_WRAPPER:
+            logger.info("OVERALL CLASSIFIER RESULTS".center(LOG_CONST_WIDTH, '='))
+        else:
+            logger.info("OVERALL ENSEMBLE RESULTS".center(LOG_CONST_WIDTH, '='))
         _write_results(os.path.join(output_dir, 'result_test.txt'), results)
     else:
-        logger.info("=== ENSEMBLE TRAINING COMPLETE ===")
+        logger.info("ENSEMBLE TRAINING COMPLETE".center(LOG_CONST_WIDTH, '='))
 
 
 def train_single_model(model: TransformerModelWrapper, train_data: List[InputExample], config: TrainConfig,
@@ -433,13 +502,16 @@ def train_single_model(model: TransformerModelWrapper, train_data: List[InputExa
     model.model.to(device)
 
     if train_data and return_train_set_results:
+        logger.info('Evaluating accuracy on train set prior to training')
         results_dict['train_set_before_training'] = evaluate(model, train_data, eval_config)['scores']['acc']
+        logger.info(f"Finished. Result: acc={results_dict['train_set_before_training']:.4f}")
 
     all_train_data = train_data + ipet_train_data
 
     if not all_train_data and not config.use_logits:
         logger.warning('Training method was called without training examples')
     else:
+        logger.info('TRAINING...')
         global_step, tr_loss = model.train(
             all_train_data, device,
             per_gpu_train_batch_size=config.per_gpu_train_batch_size,
@@ -463,7 +535,9 @@ def train_single_model(model: TransformerModelWrapper, train_data: List[InputExa
         results_dict['average_loss'] = tr_loss
 
     if train_data and return_train_set_results:
+        logger.info('Evaluating accuracy on train set AFTER to training')
         results_dict['train_set_after_training'] = evaluate(model, train_data, eval_config)['scores']['acc']
+        logger.info(f"Finished. Result: acc={results_dict['train_set_after_training']:.4f}")
 
     return results_dict
 

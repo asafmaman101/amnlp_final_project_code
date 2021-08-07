@@ -214,6 +214,8 @@ def main():
     parser.add_argument("--eval_set", choices=['dev', 'test'], default='dev',
                         help="Whether to perform evaluation on the dev set or the test set")
 
+    timer = Timer('end-to-end')
+
     args = parser.parse_args()
     logger.info("Parameters: {}".format(args))
 
@@ -277,6 +279,7 @@ def main():
     else:
         raise ValueError(f"Training method '{args.method}' not implemented")
 
+    logger.info(timer.elapsed_str())
 
 if __name__ == "__main__":
     main()

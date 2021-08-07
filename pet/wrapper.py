@@ -37,6 +37,8 @@ from pet import preprocessor
 from pet.tasks import TASK_HELPERS
 from pet.utils import InputFeatures, DictDataset, distillation_loss
 
+BAR_FORMAT = '{l_bar:17}{bar:10}{r_bar:35}'
+
 logger = log.get_logger('root')
 
 CONFIG_NAME = 'wrapper_config.json'
@@ -270,10 +272,11 @@ class TransformerModelWrapper:
         tr_loss, logging_loss = 0.0, 0.0
         self.model.zero_grad()
 
-        train_iterator = trange(int(num_train_epochs), desc="Epoch")
+        train_iterator = tqdm(range(int(num_train_epochs)), desc="Epoch".ljust(17), bar_format=BAR_FORMAT)
 
         for _ in train_iterator:
-            epoch_iterator = tqdm(train_dataloader, desc="Iteration")
+            epoch_iterator = tqdm(train_dataloader, desc="Iteration".ljust(17), leave=False,
+                                  bar_format=BAR_FORMAT)
             for _, batch in enumerate(epoch_iterator):
                 self.model.train()
                 unlabeled_batch = None
@@ -285,7 +288,7 @@ class TransformerModelWrapper:
                         try:
                             unlabeled_batch = unlabeled_iter.__next__()
                         except StopIteration:
-                            logger.info("Resetting unlabeled dataset")
+                            # logger.info("Resetting unlabeled dataset")
                             unlabeled_iter = unlabeled_dataloader.__iter__()
 
                     lm_input_ids = unlabeled_batch['input_ids']
@@ -362,7 +365,7 @@ class TransformerModelWrapper:
         preds = None
         all_indices, out_label_ids, question_ids = None, None, None
 
-        for batch in tqdm(eval_dataloader, desc="Evaluating"):
+        for batch in tqdm(eval_dataloader, desc="Evaluating".ljust(17), bar_format=BAR_FORMAT):
             self.model.eval()
 
             batch = {k: t.to(device) for k, t in batch.items()}
@@ -420,14 +423,15 @@ class TransformerModelWrapper:
     def _convert_examples_to_features(self, examples: List[InputExample], labelled: bool = True,
                                       priming: bool = False) -> List[InputFeatures]:
         features = []
-        for (ex_index, example) in enumerate(examples):
-            if ex_index % 10000 == 0:
-                logger.info("Writing example {}".format(ex_index))
+        for (ex_index, example) in tqdm(enumerate(examples), total=len(examples), desc='Creating Features',
+                                        bar_format=BAR_FORMAT):
+            # if ex_index % 10000 == 0:
+            #     logger.info("Writing example {}".format(ex_index))
             input_features = self.preprocessor.get_input_features(example, labelled=labelled, priming=priming)
             if self.task_helper:
                 self.task_helper.add_special_input_features(example, input_features)
             features.append(input_features)
-            if ex_index < 5:
+            if ex_index < 5 and False:
                 logger.info(f'--- Example {ex_index} ---')
                 logger.info(input_features.pretty_print(self.tokenizer))
         return features
