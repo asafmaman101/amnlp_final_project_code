@@ -220,7 +220,6 @@ def main():
     timer = Timer('end-to-end')
 
     args = parser.parse_args()
-    logger.info("Parameters: {}".format(args))
 
     if os.path.exists(args.output_dir) and os.listdir(args.output_dir) \
             and args.do_train and not args.overwrite_output_dir:
