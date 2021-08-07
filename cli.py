@@ -16,16 +16,19 @@ one of the supported tasks and datasets.
 """
 
 import argparse
+import json
 import os
 from typing import Tuple
+import pandas as pd
 
 import torch
 
 from pet.tasks import PROCESSORS, load_examples, UNLABELED_SET, TRAIN_SET, DEV_SET, TEST_SET, METRICS, DEFAULT_METRICS
-from pet.utils import eq_div
+from pet.utils import eq_div, Timer
 from pet.wrapper import WRAPPER_TYPES, MODEL_CLASSES, SEQUENCE_CLASSIFIER_WRAPPER, WrapperConfig
 import pet
 import log
+import logging
 
 logger = log.get_logger('root')
 
@@ -222,6 +225,19 @@ def main():
     if os.path.exists(args.output_dir) and os.listdir(args.output_dir) \
             and args.do_train and not args.overwrite_output_dir:
         raise ValueError("Output directory ({}) already exists and is not empty.".format(args.output_dir))
+
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    with open(os.path.join(args.output_dir, 'config.json'), 'w') as f:
+        json.dump(args.__dict__, f, indent=4)
+
+    file_handler = logging.FileHandler(os.path.join(args.output_dir, 'console.log'))
+    formatter = logging.Formatter(fmt='%(asctime)s - %(levelname)s - %(module)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    # logger.info("Parameters:\n{}".format(json.dumps(args.__dict__, indent=2)))
+    logger.info("Parameters:\n{}".format(pd.Series(args.__dict__)))
 
     # Setup CUDA, GPU & distributed training
     args.device = "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu"

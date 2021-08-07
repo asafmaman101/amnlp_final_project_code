@@ -14,11 +14,15 @@
 This file contains basic logging logic.
 """
 import logging
+import os
+
+import tqdm
 
 names = set()
 
 
-def __setup_custom_logger(name: str) -> logging.Logger:
+
+def __setup_custom_logger(name: str, logging_dir=None) -> logging.Logger:
     root_logger = logging.getLogger()
     root_logger.handlers.clear()
 
@@ -32,6 +36,10 @@ def __setup_custom_logger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
     logger.addHandler(handler)
+    if logging_dir:
+        logging_path = os.path.join(logging_dir, 'console.log')
+        file_handler = logging.FileHandler(logging_path)
+        logger.addHandler(file_handler)
     return logger
 
 
