@@ -294,7 +294,7 @@ def get_verbalization_ids(word: str, tokenizer: PreTrainedTokenizer, force_singl
     :return: either the list of token ids or the single token id corresponding to this word
     """
     kwargs = {'add_prefix_space': True} if isinstance(tokenizer, GPT2Tokenizer) else {}
-    ids = tokenizer.encode(word, add_special_tokens=False, **kwargs)
+    ids = tokenizer.encode(word, add_special_tokens=False, verbose=False, **kwargs)
     if not force_single_token:
         return ids
     assert len(ids) == 1, \
