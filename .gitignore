@@ -10,3 +10,4 @@ out/*
 venv/*
 datasets/*
 *.log
+.DS_Store
