@@ -189,6 +189,24 @@ class DictDataset(Dataset):
         return next(iter(self.tensors.values())).size(0)
 
 
+class Timer:
+    def __init__(self, timer_name):
+        self.start_time = datetime.utcnow()
+        self.timer_name = timer_name
+
+    def elapsed_str(self):
+        self.total_time = datetime.utcnow() - self.start_time
+
+        elapsed_hours = self.total_time.seconds // 3600
+        elapsed_minuets = self.total_time.seconds % 3600 // 60
+        elapsed_seconds = self.total_time.seconds % 3600 % 60
+        formatted_str = f'Total time for "{self.timer_name}": {elapsed_hours:02d}:{elapsed_minuets:02d}:' \
+                        f'{elapsed_seconds:02d} '.center(LOG_CONST_WIDTH, '.')
+
+        return formatted_str
+
+
+
 def set_seed(seed: int):
     """ Set RNG seeds for python's `random` module, numpy and torch"""
     random.seed(seed)
