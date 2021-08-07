@@ -28,6 +28,8 @@ import log
 from pet.utils import InputExample, exact_match, save_logits, save_predictions, softmax, LogitsList, set_seed, eq_div
 from pet.wrapper import TransformerModelWrapper, SEQUENCE_CLASSIFIER_WRAPPER, WrapperConfig
 
+from pet.utils import LOG_CONST_WIDTH
+
 logger = log.get_logger('root')
 
 

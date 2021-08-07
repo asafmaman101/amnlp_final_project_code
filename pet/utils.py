@@ -24,6 +24,7 @@ from torch.nn import functional as F
 from torch.utils.data import Dataset
 from transformers import PreTrainedTokenizer, GPT2Tokenizer
 
+LOG_CONST_WIDTH = 60
 
 class LogitsList:
     """A list of logits obtained from a finetuned PET model"""
