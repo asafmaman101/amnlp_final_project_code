@@ -16,7 +16,7 @@ This file contains basic logging logic.
 import logging
 import os
 
-import tqdm
+from tqdm import tqdm
 
 names = set()
 
