@@ -201,8 +201,9 @@ class Timer:
         elapsed_hours = self.total_time.seconds // 3600
         elapsed_minuets = self.total_time.seconds % 3600 // 60
         elapsed_seconds = self.total_time.seconds % 3600 % 60
+        elapsed_days = self.total_time.days
         formatted_str = f'Total time for "{self.timer_name}": {elapsed_hours:02d}:{elapsed_minuets:02d}:' \
-                        f'{elapsed_seconds:02d} '.center(LOG_CONST_WIDTH, '.')
+                        f'{elapsed_seconds:02d} ({elapsed_days}'.center(LOG_CONST_WIDTH, '.')
 
         return formatted_str
 
