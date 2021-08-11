@@ -11,3 +11,4 @@ venv/*
 datasets/*
 *.log
 .DS_Store
+experiment_configurations/*
