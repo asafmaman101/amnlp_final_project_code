@@ -445,7 +445,7 @@ def train_pet_ensemble(model_config: WrapperConfig, train_config: TrainConfig, e
                 scores = eval_result['scores']
 
                 logger.info(f'RESULT (pattern_id={pattern_id}, iteration={iteration})'.center(LOG_CONST_WIDTH, '-'))
-                logger.info(f'{model_type_string_lower} accuracy: {scores["acc"]}')
+                logger.info(f'{model_type_string_lower} accuracy: {scores["acc"]:2.4%}')
 
                 logger.info(pattern_iteration_timer_eval.elapsed_str())
                 logger.info(f'FINISHED {model_type_string_upper} EVALUATION.'.center(LOG_CONST_WIDTH, '='))
@@ -504,7 +504,7 @@ def train_single_model(model: TransformerModelWrapper, train_data: List[InputExa
     if train_data and return_train_set_results:
         logger.info('Evaluating accuracy on train set prior to training')
         results_dict['train_set_before_training'] = evaluate(model, train_data, eval_config)['scores']['acc']
-        logger.info(f"Finished. Result: acc={results_dict['train_set_before_training']:.4f}")
+        logger.info(f"Finished. Result: acc={results_dict['train_set_before_training']:2.4%}")
 
     all_train_data = train_data + ipet_train_data
 
@@ -537,7 +537,7 @@ def train_single_model(model: TransformerModelWrapper, train_data: List[InputExa
     if train_data and return_train_set_results:
         logger.info('Evaluating accuracy on train set AFTER to training')
         results_dict['train_set_after_training'] = evaluate(model, train_data, eval_config)['scores']['acc']
-        logger.info(f"Finished. Result: acc={results_dict['train_set_after_training']:.4f}")
+        logger.info(f"Finished. Result: acc={results_dict['train_set_after_training']:2.4%}")
 
     return results_dict
 
