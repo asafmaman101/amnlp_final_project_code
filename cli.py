@@ -188,7 +188,7 @@ def main():
                         help="The total number of unlabeled examples to use, where -1 equals all examples")
     parser.add_argument("--split_examples_evenly", action='store_true',
                         help="If true, train examples are not chosen randomly, but split evenly across all labels.")
-    parser.add_argument("--cache_dir", default="", type=str,
+    parser.add_argument("--cache_dir", default=".cache/huggingface", type=str,
                         help="Where to store the pre-trained models downloaded from S3.")
     parser.add_argument("--learning_rate", default=1e-5, type=float,
                         help="The initial learning rate for Adam.")
