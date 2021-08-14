@@ -1,0 +1,17 @@
+#!/home/fodl/asafmaman/anaconda3/envs/pet/bin/python
+import argparse
+import sys
+
+import common.utils
+
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('recipe_path')
+    parser.add_argument('--verbose', default=False, action='store_true')
+
+    args = parser.parse_args()
+
+    common.utils.build_files(**args.__dict__)
