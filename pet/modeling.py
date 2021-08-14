@@ -10,8 +10,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import ast
+import glob
 import json
 import os
+import pickle
 import random
 import statistics
 from abc import ABC
@@ -304,6 +306,80 @@ def train_pet(ensemble_model_config: WrapperConfig, ensemble_train_config: Train
     logger.info(step_three_timer.elapsed_str())
 
 
+def generate_soft_labels(path: str,  reduction: str = 'wmean',
+                         unlabeled_data: List[InputExample] = None, n_gpu: int = 1,
+                         seed: int = 42):
+    # train_pet_ensemble(ensemble_model_config, ensemble_train_config, ensemble_eval_config, pattern_ids, output_dir,
+    #                    repetitions=ensemble_repetitions, train_data=train_data, unlabeled_data=unlabeled_data,
+    #                    eval_data=eval_data, do_train=do_train, do_eval=do_eval,
+    #                    save_unlabeled_logits=not no_distillation, seed=seed)
+
+    # def train_pet_ensemble(model_config: WrapperConfig, train_config: TrainConfig, eval_config: EvalConfig,
+    #                        pattern_ids: List[int], output_dir: str, ipet_data_dir: str = None, repetitions: int = 3,
+    #                        train_data: List[InputExample] = None, unlabeled_data: List[InputExample] = None,
+    #                        eval_data: List[InputExample] = None, do_train: bool = True, do_eval: bool = True,
+    #                        save_unlabeled_logits: bool = False, seed: int = 42):
+
+    set_seed(seed)
+
+    models_pathes = glob.glob(os.path.join(path, 'p*-i*'))
+
+    models_logits = {}
+
+    for model_path in models_pathes:
+        model_str_id = os.path.basename(model_path)
+        pattern_id, iteration = model_str_id[1], model_str_id[4]
+
+        wrapper = TransformerModelWrapper.from_pretrained(model_path)
+        eval_config = EvalConfig.load(os.path.join(model_path, 'eval_config.json'))
+        eval_config.n_gpu = n_gpu
+        logger.info(f'Evaluating unlabeled logits for p.{pattern_id}-i.{iteration}')
+
+        models_logits[model_str_id] = evaluate(wrapper, unlabeled_data, eval_config)['logits']
+
+        wrapper.model = None
+        wrapper = None
+        torch.cuda.empty_cache()
+
+
+    all_logits_lists = []
+
+    for model_path in models_pathes:
+        results_file = os.path.join(model_path, 'results.txt')
+        model_str_id = os.path.basename(model_path)
+        logits = models_logits[model_str_id].tolist()
+
+        if reduction == 'mean':
+            result_train = 1
+        else:
+            if not os.path.exists(results_file):
+                logger.warning(f"Skipping model_path '{model_path}' because 'results.txt' not found")
+                continue
+
+            with open(results_file, 'r') as fh:
+                results = ast.literal_eval(fh.read())
+                result_train = results['train_set_before_training']
+
+        logger.info("File {}: Score = {}, #Logits = {}, #Labels = {}".format(
+            results_file, result_train, len(logits), len(logits[0])))
+
+        loglist = LogitsList(score=result_train, logits=logits)
+        all_logits_lists.append(loglist)
+
+    merged_loglist = merge_logits_lists(all_logits_lists, reduction=reduction)
+
+    all_logits = merged_loglist.logits
+
+    assert len(all_logits) == len(unlabeled_data)
+
+    for example, example_logits in zip(unlabeled_data, all_logits):
+        example.logits = example_logits
+
+    with open(os.path.join(path, 'unlabeled_data_object.pkl'), 'wb') as fp:
+        pickle.dump(unlabeled_data, fp)
+
+
+
 def train_classifier(model_config: WrapperConfig, train_config: TrainConfig, eval_config: EvalConfig, output_dir: str,
                      repetitions: int = 3, train_data: List[InputExample] = None,
                      unlabeled_data: List[InputExample] = None, eval_data: List[InputExample] = None,
@@ -449,7 +525,6 @@ def train_pet_ensemble(model_config: WrapperConfig, train_config: TrainConfig, e
 
                 logger.info(pattern_iteration_timer_eval.elapsed_str())
                 logger.info(f'FINISHED {model_type_string_upper} EVALUATION.'.center(LOG_CONST_WIDTH, '='))
-
 
                 results_dict['test_set_after_training'] = scores
                 results_json = 'results.json'
