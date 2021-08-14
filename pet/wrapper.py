@@ -327,7 +327,7 @@ class TransformerModelWrapper:
                         logs['loss'] = loss_scalar
                         logging_loss = tr_loss
 
-                        print(json.dumps({**logs, **{'step': global_step}}))
+                        # print(json.dumps({**logs, **{'step': global_step}}))
 
                 if 0 < max_steps < global_step:
                     epoch_iterator.close()
