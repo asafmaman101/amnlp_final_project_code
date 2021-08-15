@@ -29,7 +29,7 @@ from transformers.data.metrics import simple_accuracy
 import log
 from pet.utils import InputExample, exact_match, save_logits, save_predictions, softmax, LogitsList, set_seed, eq_div, \
     Timer
-from pet.wrapper import TransformerModelWrapper, SEQUENCE_CLASSIFIER_WRAPPER, WrapperConfig
+from pet.wrapper import TransformerModelWrapper, SEQUENCE_CLASSIFIER_WRAPPER, MLM_WRAPPER, WrapperConfig
 
 from pet.utils import LOG_CONST_WIDTH
 
@@ -306,7 +306,7 @@ def train_pet(ensemble_model_config: WrapperConfig, ensemble_train_config: Train
     logger.info(step_three_timer.elapsed_str())
 
 
-def generate_soft_labels(path: str,  reduction: str = 'wmean',
+def generate_soft_labels(path: str, reduction: str = 'wmean',
                          unlabeled_data: List[InputExample] = None, n_gpu: int = 1,
                          seed: int = 42):
     # train_pet_ensemble(ensemble_model_config, ensemble_train_config, ensemble_eval_config, pattern_ids, output_dir,
@@ -340,7 +340,6 @@ def generate_soft_labels(path: str,  reduction: str = 'wmean',
         wrapper.model = None
         wrapper = None
         torch.cuda.empty_cache()
-
 
     all_logits_lists = []
 
@@ -379,7 +378,6 @@ def generate_soft_labels(path: str,  reduction: str = 'wmean',
         pickle.dump(unlabeled_data, fp)
 
 
-
 def train_classifier(model_config: WrapperConfig, train_config: TrainConfig, eval_config: EvalConfig, output_dir: str,
                      repetitions: int = 3, train_data: List[InputExample] = None,
                      unlabeled_data: List[InputExample] = None, eval_data: List[InputExample] = None,
@@ -404,6 +402,111 @@ def train_classifier(model_config: WrapperConfig, train_config: TrainConfig, eva
                        repetitions=repetitions,
                        train_data=train_data, unlabeled_data=unlabeled_data, eval_data=eval_data, do_train=do_train,
                        do_eval=do_eval, seed=seed)
+
+
+def train_lm_classifier(model_config: WrapperConfig, train_config: TrainConfig, eval_config: EvalConfig,
+                        pattern_ids: List[int], output_dir: str, ipet_data_dir: str = None, repetitions: int = 3,
+                        train_data: List[InputExample] = None, unlabeled_data: List[InputExample] = None,
+                        eval_data: List[InputExample] = None, do_train: bool = True, do_eval: bool = True,
+                        save_unlabeled_logits: bool = False, seed: int = 42):
+    """
+    """
+
+    results = defaultdict(lambda: defaultdict(list))
+    set_seed(seed)
+
+    for pattern_id in pattern_ids:
+        for iteration in range(repetitions):
+
+            model_config.pattern_id = pattern_id
+            results_dict = {}
+
+            pattern_iter_output_dir = f"{output_dir}/p{pattern_id}-i{iteration}"
+
+            if os.path.exists(pattern_iter_output_dir):
+                logger.warning(f"Path {pattern_iter_output_dir} already exists, skipping it...")
+                continue
+
+            if not os.path.exists(pattern_iter_output_dir):
+                os.makedirs(pattern_iter_output_dir)
+
+            wrapper = init_model(model_config)
+
+            # Training
+            if do_train:
+                assert wrapper.config.model_type == MLM_WRAPPER
+                assert train_config.use_logits
+                results_dict.update(train_single_model(wrapper, train_data, train_config, eval_config,
+                                                       unlabeled_data=unlabeled_data))
+
+                # saving pattern-iteration results.
+                results_txt_file = 'results.txt'
+                logger.info(f'Saving results to {os.path.join(pattern_iter_output_dir, results_txt_file)}')
+                with open(os.path.join(pattern_iter_output_dir, results_txt_file), 'w') as fh:
+                    fh.write(str(results_dict))
+                logger.info("Saving complete")
+
+                logger.info("Saving trained model at {}...".format(pattern_iter_output_dir))
+                wrapper.save(pattern_iter_output_dir)
+                train_config.save(os.path.join(pattern_iter_output_dir, 'train_config.json'))
+                eval_config.save(os.path.join(pattern_iter_output_dir, 'eval_config.json'))
+                logger.info("Saving complete")
+
+                if not do_eval:
+                    wrapper.model = None
+                    wrapper = None
+                    torch.cuda.empty_cache()
+
+            # Evaluation
+            if do_eval:
+                if not wrapper:
+                    wrapper = TransformerModelWrapper.from_pretrained(pattern_iter_output_dir)
+
+                eval_result = evaluate(wrapper, eval_data, eval_config, priming_data=train_data)
+
+                save_predictions(os.path.join(pattern_iter_output_dir, 'predictions.jsonl'), wrapper, eval_result)
+                save_logits(os.path.join(pattern_iter_output_dir, 'eval_logits.txt'), eval_result['logits'])
+
+                scores = eval_result['scores']
+
+                results_dict['test_set_after_training'] = scores
+                results_json = 'results.json'
+                logger.info(f'Saving results to {os.path.join(pattern_iter_output_dir, results_json)}')
+                with open(os.path.join(pattern_iter_output_dir, results_json), 'w') as fh:
+                    json.dump(results_dict, fh, indent=4)
+                logger.info("Saving complete")
+
+                for metric, value in scores.items():
+                    results[metric][pattern_id].append(value)
+
+                wrapper.model = None
+                wrapper = None
+                torch.cuda.empty_cache()
+
+    if do_eval:
+        _write_results(os.path.join(output_dir, 'result_test.txt'), results)
+
+
+def eval_lm_classifier(model_config: WrapperConfig, eval_config: EvalConfig, output_dir: str,
+                       eval_data: List[InputExample] = None, seed: int = 42):
+    set_seed(seed)
+    results_dict = {}
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    wrapper = init_model(model_config)
+
+    assert wrapper.config.wrapper_type == MLM_WRAPPER
+    eval_result = evaluate(wrapper, eval_data, eval_config)
+
+    results_dict.update({'wrapper_config': model_config.__dict__})
+    results_dict.update({'eval_config': eval_config.__dict__})
+    results_dict['test_set_after_training'] = eval_result['scores']
+
+    with open(os.path.join(output_dir, 'results.json'), 'w') as fh:
+        json.dump(results_dict, fh, indent=4)
+
+    print(json.dumbs(results_dict))
 
 
 def train_pet_ensemble(model_config: WrapperConfig, train_config: TrainConfig, eval_config: EvalConfig,
