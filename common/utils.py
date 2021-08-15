@@ -1,16 +1,11 @@
 import json
 import os
-import pickle
 import stat
 from collections import defaultdict
 from itertools import product
 from typing import Union, Dict
 
 import pandas as pd
-
-from common.constants import DATASETS_DIRS
-from pet import LogitsList
-from pet.tasks import load_examples, UNLABELED_SET
 
 DEFAULTS_PATH = 'experiment_configurations/defaults.json'
 
@@ -118,16 +113,13 @@ def parse_dir_results(path: str, verbose: bool = False, save=False, override=Fal
 
     return experiments_dict
 
-def load_unlabeled_with_logits(logits_path: str, task_name: str):
-    logits_file = os.path.join(logits_path, 'unlabeled_logits.txt')
-    logits = LogitsList.load(logits_file).logits
-    unlabeled_data = load_examples(task_name, DATASETS_DIRS[task_name], UNLABELED_SET, num_examples=len(logits))
 
-    for example, example_logits in zip(unlabeled_data, logits):
-        example.logits = example_logits
+def trained_lm_path(train_task: str, train_examples: int, pattern_id: int, iteration: int, final:bool = False):
+    final_str = "final" if final else ""
+    root_path = f"outputs/{train_task}/{train_task}_m_{train_examples}_s_250/"
+    specifier = f"p{pattern_id}-i{iteration}"
 
-    with open(os.path.join(logits_path, 'unlabeled_data.pkl'), 'wb') as fp:
-        pickle.dump(unlabeled_data, fp)
+    return os.path.join(root_path, final_str,specifier)
 
 if __name__ == '__main__':
     # print(parse_dir_results('../outputs/yahoo'))
