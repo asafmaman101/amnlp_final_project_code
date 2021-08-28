@@ -165,6 +165,50 @@ class MnliProcessor(DataProcessor):
             return lines
 
 
+class MrpcProcessor(DataProcessor):
+
+    def get_train_examples(self, data_dir):
+        return self._create_examples(MrpcProcessor._read_tsv(os.path.join(data_dir, "train.csv"), quotechar='"'), "train")
+
+    def get_dev_examples(self, data_dir):
+        return self._create_examples(MrpcProcessor._read_tsv(os.path.join(data_dir, "test.csv"), quotechar='"'), "dev")
+
+    def get_test_examples(self, data_dir) -> List[InputExample]:
+        raise NotImplementedError()
+
+    def get_unlabeled_examples(self, data_dir) -> List[InputExample]:
+        return self.get_train_examples(data_dir)
+
+    def get_labels(self):
+        return ["1", "2"]
+
+    @staticmethod
+    def _create_examples(lines: List[List[str]], set_type: str) -> List[InputExample]:
+        examples = []
+
+        for (i, line) in enumerate(lines):
+            if i == 0:
+                continue
+            guid = "%s-%s" % (set_type, line[0])
+            text_a = line[1]
+            text_b = line[2]
+            label = line[0]
+
+            example = InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label)
+            examples.append(example)
+
+        return examples
+
+    @staticmethod
+    def _read_tsv(input_file, quotechar=None):
+        with open(input_file, "r", encoding="utf-8-sig") as f:
+            reader = csv.reader(f, delimiter=",", quotechar=quotechar)
+            lines = []
+            for line in reader:
+                lines.append(line)
+            return lines
+
+
 class MnliMismatchedProcessor(MnliProcessor):
     """Processor for the MultiNLI mismatched data set (GLUE version)."""
 
@@ -765,9 +809,12 @@ class RecordProcessor(DataProcessor):
 PROCESSORS = {
     "mnli": MnliProcessor,
     "mnli-mm": MnliMismatchedProcessor,
+    "mrpc": MrpcProcessor,
+    "qqp": MrpcProcessor,
     "agnews": AgnewsProcessor,
     "yahoo": YahooAnswersProcessor,
     "yelp-polarity": YelpPolarityProcessor,
+    "imdb": YelpPolarityProcessor,
     "yelp-full": YelpFullProcessor,
     "xstance-de": lambda: XStanceProcessor("de"),
     "xstance-fr": lambda: XStanceProcessor("fr"),

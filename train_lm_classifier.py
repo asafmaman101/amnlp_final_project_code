@@ -9,6 +9,7 @@ import pandas as pd
 import torch
 
 from common.constants import DATASETS_DIRS
+from common.utils import load_unlabeled_with_logits
 from common.utils import trained_lm_path
 from pet import LogitsList
 from pet.tasks import PROCESSORS, load_examples, UNLABELED_SET, TRAIN_SET, DEV_SET, TEST_SET, METRICS, DEFAULT_METRICS
@@ -51,21 +52,25 @@ def setup_train_lm_config(args):
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    with open(os.path.join(args.output_dir, 'config.json'), 'w') as f:
-        json.dump(args.__dict__, f, indent=4)
 
     file_handler = logging.FileHandler(os.path.join(args.output_dir, 'console.log'))
     formatter = logging.Formatter(fmt='%(asctime)s - %(levelname)s - %(module)s - %(message)s')
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 
-    logger.info("Parameters:\n{}".format(pd.Series(args.__dict__)))
 
     # Setup CUDA, GPU & distributed training
+    if args.override_visible_gpu:
+        args.visible_gpus = [args.override_visible_gpu]
     gpus_string_list = map(lambda x: str(x), args.visible_gpus)
     os.environ["CUDA_VISIBLE_DEVICES"] = ','.join(gpus_string_list)
     args.device = "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu"
     args.n_gpu = torch.cuda.device_count()
+
+    logger.info("Parameters:\n{}".format(pd.Series(args.__dict__)))
+
+    with open(os.path.join(args.output_dir, 'config.json'), 'w') as f:
+        json.dump(args.__dict__, f, indent=4)
 
     # Prepare task
     args.task_name = args.task_name.lower()
@@ -80,17 +85,19 @@ def setup_train_lm_config(args):
 
     args.data_dir = os.path.join("datasets", args.task_name)
 
-    train_data = load_examples(
-        args.task_name, args.data_dir, TRAIN_SET, num_examples=args.train_examples)
-    eval_data = load_examples(
-        args.task_name, args.data_dir, eval_set, num_examples=args.test_examples)
-    # unlabeled_data = load_examples(
-    #     args.task_name, args.data_dir, UNLABELED_SET, num_examples=args.unlabeled_examples)
-    unlabeled_data = load_unlabeled_with_logits(args.task_name, args.trained_on_examples, args.unlabeled_examples)
-
     args.metrics = METRICS.get(args.task_name, DEFAULT_METRICS)
 
     model_cfg, train_cfg, eval_cfg = load_train_lm_config(args)
+
+    eval_data = load_examples(args.task_name, args.data_dir, eval_set, num_examples=args.test_examples)
+
+    if not train_cfg.use_logits:
+        train_data = load_examples(args.task_name, args.data_dir, TRAIN_SET, num_examples=args.train_examples)
+        unlabeled_data = load_examples(
+            args.task_name, args.data_dir, UNLABELED_SET, num_examples=args.unlabeled_examples)
+    else:
+        unlabeled_data = load_unlabeled_with_logits(args.task_name, args.trained_on_examples, args.unlabeled_examples)
+        train_data = unlabeled_data
 
     pet.train_lm_classifier(model_cfg, train_cfg, eval_cfg,
                             pattern_id=args.pattern_id, output_dir=args.output_dir,
@@ -101,7 +108,7 @@ def setup_train_lm_config(args):
 
 def main():
     parser = argparse.ArgumentParser(description="Command line interface for PET/iPET")
-
+    #
     # Required parameters
     parser.add_argument("--model_type", default=None, type=str, required=True, choices=MODEL_CLASSES.keys(),
                         help="The type of the pretrained language model to use")
@@ -180,29 +187,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-def load_unlabeled_with_logits(task_name: str, trained_on_examples: int = 1000,
-                               unlabeled_examples: int = -1, use_cache=False):
-
-    logits_path = f"outputs/{task_name}/{task_name}_m_{trained_on_examples}_s_250"
-
-    logits_file = os.path.join(logits_path, 'unlabeled_logits.txt')
-    logits = LogitsList.load(logits_file).logits
-
-    if len(logits) < unlabeled_examples:
-        raise ValueError("Not enough logits evaluated in the specified directory.")
-
-    if unlabeled_examples == -1:
-        unlabeled_examples = len(logits)
-
-    unlabeled_data = load_examples(task_name, DATASETS_DIRS[task_name], UNLABELED_SET, num_examples=unlabeled_examples)
-
-    for example, example_logits in zip(unlabeled_data, logits):
-        example.logits = example_logits
-
-    if use_cache:
-        with open(os.path.join(logits_path, 'unlabeled_data.pkl'), 'wb') as fp:
-            pickle.dump(unlabeled_data, fp)
-
-    return unlabeled_data

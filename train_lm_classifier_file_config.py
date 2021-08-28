@@ -20,13 +20,18 @@ def main():
     # Required parameters
     parser.add_argument("--config_path", default=None, type=str, required=True,
                         help="Path of the json configuration file to run evalutaion from.")
+    parser.add_argument("--override_visible_gpu", type=int)
 
     args = parser.parse_args()
+
+    override_visible_gpu = args.override_visible_gpu
 
     with open(args.config_path, 'r') as fp:
         args_dict = json.load(fp)
 
     args = argparse.Namespace(**args_dict)
+
+    args.override_visible_gpu = override_visible_gpu
 
     setup_train_lm_config(args)
 

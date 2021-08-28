@@ -1,11 +1,16 @@
 import json
 import os
+import pickle
 import stat
 from collections import defaultdict
 from itertools import product
 from typing import Union, Dict
 
 import pandas as pd
+
+from common.constants import DATASETS_DIRS
+from pet import LogitsList
+from pet.tasks import load_examples, UNLABELED_SET
 
 DEFAULTS_PATH = 'experiment_configurations/defaults.json'
 
@@ -16,7 +21,8 @@ def exec_tmux_window(command: Union[str, list], window_name: str) -> None:
     os.system('tmux new-window -n %s "%s ; exec bash"' % (window_name, command))
 
 
-def build_files(recipe_path: str, verbose: bool = False, build_script: bool = True) -> None:
+def build_files(recipe_path: str, verbose: bool = False, build_script: bool = True,
+                take_defaults: bool = False) -> None:
     bash_script_file_name = 'bash_script.sh'
     bash_script = ['#!/bin/bash\n']
 
@@ -25,8 +31,11 @@ def build_files(recipe_path: str, verbose: bool = False, build_script: bool = Tr
 
     base, options = recipe['base'], recipe['options']
 
-    with open(DEFAULTS_PATH, 'r') as fp:
-        defaults = json.load(fp)
+    if take_defaults:
+        with open(DEFAULTS_PATH, 'r') as fp:
+            defaults = json.load(fp)
+    else:
+        defaults ={}
 
     updated_base = dict(defaults, **base)
     gpus = updated_base['visible_gpus']
@@ -35,16 +44,45 @@ def build_files(recipe_path: str, verbose: bool = False, build_script: bool = Tr
     if not isinstance(options, list):
         options = [options]
 
+    gpu = 0
+    gpus_dict = defaultdict(list)
+
+    meta_output_dir = updated_base['output_dir']
+
     for option in options:
-        for gpu, combination in enumerate(product(*option.values())):
+        for combination in product(*option.values()):
             combination_dict = dict(zip(option.keys(), combination))
 
             updated_base.update(combination_dict)
             updated_base.update(dict(visible_gpus=[gpus[gpu % len(gpus)]]))
 
+            parsed_output_dir = updated_base['output_dir'].format(**updated_base)
+            updated_base.update(dict(output_dir=parsed_output_dir))
+
+            if "pattern_dict" in combination_dict:
+                if isinstance(combination_dict['pattern_dict'], list):
+                    combination_dict['pattern_dict'] = dict(zip(combination_dict['train_tasks'], combination_dict['pattern_dict']))
+                elif isinstance(combination_dict['pattern_dict'], int):
+                    combination_dict['pattern_dict'] = dict.fromkeys(combination_dict['train_tasks'], combination_dict['pattern_dict'])
+
             path = os.path.join(recipe_dir, 'compiled_scripts')
-            path = os.path.join(path, '_'.join(f'{var[0]}_{os.path.basename(val)}' for var, val in combination_dict.items()
-                                               if var != 'pattern_ids')) + '.json'
+            filename = []
+
+            for var, val in combination_dict.items():
+                if var == 'train_tasks' and isinstance(val, list):
+                    filename.append('_'.join(v[0:2] for v in val))
+                elif var == 'pattern_dict':
+                    filename.append('p')
+                    filename.append('_'.join(map(lambda x: str(x), val.values())))
+                else:
+                    parsed_val = os.path.basename(str(val))
+                    filename.append(f'{var[0]}_{parsed_val}')
+
+            filename = '_'.join(filename)
+
+            updated_base.update(dict(output_dir=os.path.join(meta_output_dir, filename)))
+
+            path = os.path.join(path, filename) + '.json'
 
             os.makedirs(os.path.dirname(path), exist_ok=True)
 
@@ -52,12 +90,22 @@ def build_files(recipe_path: str, verbose: bool = False, build_script: bool = Tr
                 json.dump(updated_base, fp, indent=2)
             if verbose: print(f'Saved {path}')
 
-            window_name = os.path.basename(updated_base["output_dir"]).format(**updated_base)
-            command = f'petcli {path}'
+            # window_name = os.path.basename(updated_base["output_dir"].format(**updated_base))
+            command = f'python train_lm_classifier_file_config.py --config_path {path}'
 
-            bash_script += [f'tmux new-window -n {window_name} "{command} ; exec bash"']
+            gpus_dict[gpus[gpu % len(gpus)]].append(command)
+            # bash_script += [f'tmux new-window -n {window_name} "{command} ; exec bash"']
 
-    bash_script += ['']
+            gpu += 1
+
+    print(f'total {gpu} runs.')
+    for gpu_number, commands in gpus_dict.items():
+        bash_script += [f'tmux new-window -n gpu_{gpu_number} "\\']
+        for command in commands:
+            bash_script.append(command + ' ; \\')
+        bash_script += [f'exec bash"']
+        bash_script += ['']
+
 
     if build_script:
         bash_script_path = os.path.join(recipe_dir, bash_script_file_name)
@@ -126,3 +174,29 @@ if __name__ == '__main__':
     # parse_dir_results('../outputs/agnews')
     # load_unlabeled_with_logits('outputs/agnews/agnews_m_10_s_250', 'agnews')
     pass
+
+
+def load_unlabeled_with_logits(task_name: str, trained_on_examples: int = 1000,
+                               unlabeled_examples: int = -1, use_cache=False):
+
+    logits_path = f"outputs/PET_vanilla/{task_name}/{task_name}_m_{trained_on_examples}_s_250"
+
+    logits_file = os.path.join(logits_path, 'unlabeled_logits.txt')
+    logits = LogitsList.load(logits_file).logits
+
+    if len(logits) < unlabeled_examples:
+        raise ValueError("Not enough logits evaluated in the specified directory.")
+
+    if unlabeled_examples == -1:
+        unlabeled_examples = len(logits)
+
+    unlabeled_data = load_examples(task_name, DATASETS_DIRS[task_name], UNLABELED_SET, num_examples=unlabeled_examples)
+
+    for example, example_logits in zip(unlabeled_data, logits):
+        example.logits = example_logits
+
+    if use_cache:
+        with open(os.path.join(logits_path, 'unlabeled_data.pkl'), 'wb') as fp:
+            pickle.dump(unlabeled_data, fp)
+
+    return unlabeled_data

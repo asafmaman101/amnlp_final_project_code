@@ -40,7 +40,7 @@ class PVP(ABC):
     custom implementation of a PVP.
     """
 
-    def __init__(self, wrapper, pattern_id: int = 0, verbalizer_file: str = None, seed: int = 42):
+    def __init__(self, wrapper, pattern_id: int = 0, verbalizer_file: str = None, seed: int = 42, task_name = None):
         """
         Create a new PVP.
 
@@ -53,17 +53,29 @@ class PVP(ABC):
         self.pattern_id = pattern_id
         self.rng = random.Random(seed)
 
+        if hasattr(self.wrapper.config, 'label_list'):
+            self.label_list = self.wrapper.config.label_list
+        elif hasattr(self.wrapper.config, 'label_dict') and task_name:
+            self.label_list = self.wrapper.config.label_dict[task_name]
+            self.task_name = task_name
+
         if verbalizer_file:
             self.verbalize = PVP._load_verbalizer_from_file(verbalizer_file, self.pattern_id)
 
-        use_multimask = (self.wrapper.config.task_name in TASK_HELPERS) and (
-            issubclass(TASK_HELPERS[self.wrapper.config.task_name], MultiMaskTaskHelper)
-        )
-        if not use_multimask and self.wrapper.config.wrapper_type in [wrp.MLM_WRAPPER, wrp.PLM_WRAPPER]:
-            self.mlm_logits_to_cls_logits_tensor = self._build_mlm_logits_to_cls_logits_tensor()
+        use_multimask = False
+        if hasattr(self.wrapper.config, 'task_name'):
+            use_multimask = (self.wrapper.config.task_name in TASK_HELPERS) and (
+                issubclass(TASK_HELPERS[self.wrapper.config.task_name], MultiMaskTaskHelper)
+            )
 
-    def _build_mlm_logits_to_cls_logits_tensor(self):
-        label_list = self.wrapper.config.label_list
+        if not use_multimask and self.wrapper.config.wrapper_type in [wrp.MLM_WRAPPER, wrp.PLM_WRAPPER]:
+            if task_name:
+                self.mlm_logits_to_cls_logits_tensor = self._build_mlm_logits_to_cls_logits_tensor(task_name)
+            else:
+                self.mlm_logits_to_cls_logits_tensor = self._build_mlm_logits_to_cls_logits_tensor()
+
+    def _build_mlm_logits_to_cls_logits_tensor(self, task_name = None):
+        label_list = self.label_list
         m2c_tensor = torch.ones([len(label_list), self.max_num_verbalizers], dtype=torch.long) * -1
 
         for label_idx, label in enumerate(label_list):
@@ -87,7 +99,7 @@ class PVP(ABC):
     @property
     def max_num_verbalizers(self) -> int:
         """Return the maximum number of verbalizers across all labels"""
-        return max(len(self.verbalize(label)) for label in self.wrapper.config.label_list)
+        return max(len(self.verbalize(label)) for label in self.label_list)
 
     @staticmethod
     def shortenable(s):
@@ -217,7 +229,7 @@ class PVP(ABC):
     def _convert_single_mlm_logits_to_cls_logits(self, logits: torch.Tensor) -> torch.Tensor:
         m2c = self.mlm_logits_to_cls_logits_tensor.to(logits.device)
         # filler_len.shape() == max_fillers
-        filler_len = torch.tensor([len(self.verbalize(label)) for label in self.wrapper.config.label_list],
+        filler_len = torch.tensor([len(self.verbalize(label)) for label in self.label_list],
                                   dtype=torch.float)
         filler_len = filler_len.to(logits.device)
 
@@ -352,6 +364,39 @@ class MnliPVP(PVP):
         if self.pattern_id == 0 or self.pattern_id == 1:
             return MnliPVP.VERBALIZER_A[label]
         return MnliPVP.VERBALIZER_B[label]
+
+
+class MrpcPVP(PVP):
+    VERBALIZER_A = {
+        "1": ["Wrong"],
+        "2": ["Right"]
+    }
+    VERBALIZER_B = {
+        "1": ["No"],
+        "2": ["Yes"]
+    }
+    VERBALIZER_C = {
+        "1": ["No"],
+        "2": ["Yes"]
+    }
+
+    def get_parts(self, example: InputExample) -> FilledPattern:
+        text_a = self.shortenable(self.remove_final_punc(example.text_a))
+        text_b = self.shortenable(example.text_b)
+
+        if self.pattern_id == 0 or self.pattern_id == 2:
+            return ['"', text_a, '" ?'], [self.mask, ', "', text_b, '"']
+        elif self.pattern_id == 1 or self.pattern_id == 3:
+            return [text_a, '?'], [self.mask, ',', text_b]
+        elif self.pattern_id == 4:
+            return [text_a, '.'], [self.mask, ',', text_b]
+
+    def verbalize(self, label) -> List[str]:
+        if self.pattern_id == 0 or self.pattern_id == 1:
+            return MrpcPVP.VERBALIZER_A[label]
+        if self.pattern_id == 2 or self.pattern_id == 3:
+            return MrpcPVP.VERBALIZER_B[label]
+        return MrpcPVP.VERBALIZER_C[label]
 
 
 class YelpPolarityPVP(PVP):
@@ -621,7 +666,10 @@ class RecordPVP(PVP):
 PVPS = {
     'agnews': AgnewsPVP,
     'mnli': MnliPVP,
+    'mrpc': MrpcPVP,
+    'qqp': MrpcPVP,
     'yelp-polarity': YelpPolarityPVP,
+    'imdb': YelpPolarityPVP,
     'yelp-full': YelpFullPVP,
     'yahoo': YahooPVP,
     'xstance': XStancePVP,

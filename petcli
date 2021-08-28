@@ -1,0 +1,19 @@
+#!/home/fodl/asafmaman/anaconda3/envs/pet/bin/python
+
+import sys
+
+from cli import run_experiment_given_arguments
+from argparse import Namespace
+
+import json
+
+def main():
+
+    with open(sys.argv[1], 'r') as fd:
+        plan = json.load(fd)
+
+    plan = Namespace(**plan)
+    run_experiment_given_arguments(plan)
+
+if __name__ == '__main__':
+    main()

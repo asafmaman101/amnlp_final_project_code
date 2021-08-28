@@ -2,6 +2,7 @@ import argparse
 import os
 
 import torch
+import pandas as pd
 
 from common.constants import DATASETS_DIRS
 from pet import WrapperConfig
@@ -12,7 +13,13 @@ from pet.wrapper import MODEL_CLASSES
 
 
 def setup_configs_for_eval(args):
+    
+    args.output_dir = args.output_dir.format(**args.__dict__)
+
+    print("Parameters:\n{}".format(pd.Series(args.__dict__)))
+
     processor = PROCESSORS[args.task_name]()
+
     label_list = processor.get_labels()
 
     gpus_string_list = map(lambda x: str(x), args.visible_gpus)

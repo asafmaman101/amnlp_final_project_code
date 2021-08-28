@@ -29,7 +29,8 @@ from transformers.data.metrics import simple_accuracy
 import log
 from pet.utils import InputExample, exact_match, save_logits, save_predictions, softmax, LogitsList, set_seed, eq_div, \
     Timer
-from pet.wrapper import TransformerModelWrapper, SEQUENCE_CLASSIFIER_WRAPPER, MLM_WRAPPER, WrapperConfig
+from pet.wrapper import TransformerModelWrapper, SEQUENCE_CLASSIFIER_WRAPPER, MLM_WRAPPER, WrapperConfig, \
+    TransformerMultitaskModelWrapper, MultitaskWrapperConfig
 
 from pet.utils import LOG_CONST_WIDTH
 
@@ -45,7 +46,7 @@ class PetConfig(ABC):
     def save(self, path: str):
         """Save this config to a file."""
         with open(path, 'w', encoding='utf8') as fh:
-            json.dump(self.__dict__, fh)
+            json.dump(self.__dict__, fh, indent=2)
 
     @classmethod
     def load(cls, path: str):
@@ -149,6 +150,14 @@ def init_model(config: WrapperConfig) -> TransformerModelWrapper:
     """Initialize a new model from the given config."""
     assert config.pattern_id is not None, 'A pattern_id must be set for initializing a new PET model'
     model = TransformerModelWrapper(config)
+    return model
+
+
+def init_multi_model(config: MultitaskWrapperConfig) -> TransformerMultitaskModelWrapper:
+    """Initialize a new model from the given config."""
+    for pattern_id in config.pattern_dict.values():
+        assert pattern_id is not None, 'A pattern_id must be set for initializing a new PET model'
+    model = TransformerMultitaskModelWrapper(config)
     return model
 
 
@@ -419,9 +428,11 @@ def train_lm_classifier(model_config: WrapperConfig, train_config: TrainConfig, 
     assert wrapper.config.wrapper_type == MLM_WRAPPER
 
     results_dict.update({'wrapper_config': model_config.__dict__})
+    results_dict.update({'train_config': train_config.__dict__})
     results_dict.update({'eval_config': eval_config.__dict__})
     results_dict.update(train_single_model(wrapper, train_data, train_config, eval_config,
-                                           unlabeled_data=unlabeled_data))
+                                           unlabeled_data=unlabeled_data, return_train_set_results=False,
+                                           labelled=True))
 
     wrapper.save(output_dir)
     train_config.save(os.path.join(output_dir, 'train_config.json'))
@@ -455,7 +466,43 @@ def eval_lm_classifier(model_config: WrapperConfig, eval_config: EvalConfig, out
     with open(os.path.join(output_dir, 'results.json'), 'w') as fh:
         json.dump(results_dict, fh, indent=4)
 
-    print(json.dumps(results_dict))
+    print(json.dumps(results_dict,indent=2))
+
+
+def train_multi_classifier(model_config: MultitaskWrapperConfig, train_config: TrainConfig, eval_config: EvalConfig,
+                           pattern_dict: Dict[str, List[int]], output_dir: str,
+                           train_datas: Dict[str, List[InputExample]] = None,
+                           unlabeled_datas: Dict[str, List[InputExample]] = None,
+                           eval_datas: Dict[str, List[InputExample]] = None, do_eval: bool = True,
+                           seed: int = 42):
+    set_seed(seed)
+    results_dict = {}
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    model_config.pattern_dict = pattern_dict
+    wrapper = init_multi_model(model_config)
+
+    assert wrapper.config.wrapper_type == MLM_WRAPPER
+
+    results_dict.update({'wrapper_config': model_config.__dict__})
+    results_dict.update({'train_config': train_config.__dict__})
+    results_dict.update({'eval_config': eval_config.__dict__})
+    results_dict.update(train_single_multi_model(wrapper, train_datas, train_config, eval_config,
+                                           unlabeled_datas=unlabeled_datas, return_train_set_results=False,
+                                           labelled=True))
+
+    wrapper.save(output_dir)
+    train_config.save(os.path.join(output_dir, 'train_config.json'))
+    eval_config.save(os.path.join(output_dir, 'eval_config.json'))
+
+    # if do_eval:
+    #     eval_result = evaluate(wrapper, eval_data, eval_config)
+    #     results_dict['test_set_after_training'] = eval_result['scores']
+    #
+    # with open(os.path.join(output_dir, 'results.json'), 'w') as fh:
+    #     json.dump(results_dict, fh, indent=4)
+
 
 
 def train_pet_ensemble(model_config: WrapperConfig, train_config: TrainConfig, eval_config: EvalConfig,
@@ -605,7 +652,8 @@ def train_pet_ensemble(model_config: WrapperConfig, train_config: TrainConfig, e
 
 def train_single_model(model: TransformerModelWrapper, train_data: List[InputExample], config: TrainConfig,
                        eval_config: EvalConfig = None, ipet_train_data: List[InputExample] = None,
-                       unlabeled_data: List[InputExample] = None, return_train_set_results: bool = True):
+                       unlabeled_data: List[InputExample] = None, return_train_set_results: bool = True,
+                       labelled=False):
     """
     Train a single model.
 
@@ -656,7 +704,8 @@ def train_single_model(model: TransformerModelWrapper, train_data: List[InputExa
             lm_training=config.lm_training,
             use_logits=config.use_logits,
             alpha=config.alpha,
-            temperature=config.temperature
+            temperature=config.temperature,
+            labelled=labelled
         )
         results_dict['global_step'] = global_step
         results_dict['average_loss'] = tr_loss
@@ -665,6 +714,49 @@ def train_single_model(model: TransformerModelWrapper, train_data: List[InputExa
         logger.info('Evaluating accuracy on train set AFTER to training')
         results_dict['train_set_after_training'] = evaluate(model, train_data, eval_config)['scores']['acc']
         logger.info(f"Finished. Result: acc={results_dict['train_set_after_training']:2.4%}")
+
+    return results_dict
+
+
+def train_single_multi_model(model: TransformerMultitaskModelWrapper, train_datas: Dict[str, List[InputExample]],
+                             config: TrainConfig,
+                             eval_config: EvalConfig = None,
+                             unlabeled_datas: Dict[str, List[InputExample]] = None,
+                             return_train_set_results: bool = True,
+                             labelled=False):
+
+    device = torch.device(config.device if config.device else "cuda" if torch.cuda.is_available() else "cpu")
+
+    results_dict = {}
+
+    model.model.to(device)
+
+    if not train_datas and not config.use_logits:
+        logger.warning('Training method was called without training examples')
+    else:
+        logger.info('TRAINING...')
+        global_step, tr_loss = model.train(
+            train_datas, device,
+            per_gpu_train_batch_size=config.per_gpu_train_batch_size,
+            per_gpu_unlabeled_batch_size=config.per_gpu_unlabeled_batch_size,
+            n_gpu=config.n_gpu,
+            num_train_epochs=config.num_train_epochs,
+            max_steps=config.max_steps,
+            gradient_accumulation_steps=config.gradient_accumulation_steps,
+            weight_decay=config.weight_decay,
+            learning_rate=config.learning_rate,
+            adam_epsilon=config.adam_epsilon,
+            warmup_steps=config.warmup_steps,
+            max_grad_norm=config.max_grad_norm,
+            unlabeled_datas=unlabeled_datas if config.lm_training or config.use_logits else None,
+            lm_training=config.lm_training,
+            use_logits=config.use_logits,
+            alpha=config.alpha,
+            temperature=config.temperature,
+            labelled=labelled
+        )
+        results_dict['global_step'] = global_step
+        results_dict['average_loss'] = tr_loss
 
     return results_dict
 
