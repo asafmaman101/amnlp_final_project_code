@@ -70,7 +70,13 @@ def build_files(recipe_path: str, verbose: bool = False, build_script: bool = Tr
 
             for var, val in combination_dict.items():
                 if var == 'train_tasks' and isinstance(val, list):
-                    filename.append('_'.join(v[0:2] for v in val))
+                    temp_val = val.copy()
+                    for idx, item in enumerate(temp_val):
+                        if item == 'yelp-full':
+                            temp_val[idx] = 'yf'
+                        elif item == 'yelp-polarity':
+                            temp_val[idx] = 'yp'
+                    filename.append('_'.join(v[0:2] for v in temp_val))
                 elif var == 'pattern_dict':
                     filename.append('p')
                     filename.append('_'.join(map(lambda x: str(x), val.values())))
@@ -91,7 +97,7 @@ def build_files(recipe_path: str, verbose: bool = False, build_script: bool = Tr
             if verbose: print(f'Saved {path}')
 
             # window_name = os.path.basename(updated_base["output_dir"].format(**updated_base))
-            command = f'python train_lm_classifier_file_config.py --config_path {path}'
+            command = f'python eval_lm_classifier_file_config.py --config_path {path}'
 
             gpus_dict[gpus[gpu % len(gpus)]].append(command)
             # bash_script += [f'tmux new-window -n {window_name} "{command} ; exec bash"']
